@@ -1,76 +1,81 @@
 import streamlit as st
 import os
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.llms import HuggingFaceHub  
-from langchain.prompts import PromptTemplate
-from langchain.chains import RetrievalQA
-from langchain.vectorstores import FAISS
-from dotenv import load_dotenv
 
-load_dotenv()
+from backend.pdf_processor import PDFProcessor
+from backend.chatbot import PDFChatbot
 
-
-folder_path = "./"
-
-embedder = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-
-def get_llm():
-    llm = HuggingFaceHub(repo_id="EleutherAI/gpt-neo-2.7B", 
-        huggingfacehub_api_token=os.getenv("HUGGINGFACEHUB_API_TOKEN"),
-        model_kwargs={"max_length": 512, 'max_new_tokens': 100}) 
-    return llm
-
-# get_response() using local LLM and vectorstore
-def get_response(llm, vectorstore, question):
-    ## Create prompt / template
-    prompt_template = """
-    Human: Please use the given context to provide concise answer to the question
-    If you don't know the answer, just say that you don't know, don't try to make up an answer.
-    <context>
-    {context}
-    </context>
-
-    Question: {question}
-
-    Assistant:"""
-
-    PROMPT = PromptTemplate(
-        template=prompt_template, input_variables=["context", "question"]
-    )
-
-    qa = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=vectorstore.as_retriever(
-            search_type="similarity", search_kwargs={"k": 5}
-        ),
-        return_source_documents=True,
-        chain_type_kwargs={"prompt": PROMPT}
-    )
-    
-    answer = qa({"query": question})
-    return answer['result']
-
-## main method
 def main():
-    st.header("Chat with PDF Demo using Local LLM and RAG")
+    """Streamlit Chatbot Application"""
+    st.title("PDF Chatbot")
 
+    # Initialize chatbot once
+    if 'chatbot' not in st.session_state:
+        st.session_state.chatbot = PDFChatbot()
 
-    ## Load FAISS index locally
-    faiss_index = FAISS.load_local(
-        index_name="vector_space",
-        folder_path=folder_path,
-        embeddings=embedder,
-        allow_dangerous_deserialization=True
-    )
+    # Clear chat history
+    if st.button('Clear Chat History'):
+        st.session_state.chat_history = []
+        st.success("Chat history cleared!")
 
-    question = st.text_input("Please ask your question")
-    
-    if st.button("Ask Question"):
-        with st.spinner("Querying..."):
-            llm = get_llm()
-            st.write(get_response(llm, faiss_index, question))
-            st.success("Done")
+    # Load vector store once
+    if 'vector_store' not in st.session_state:
+        try:
+            st.session_state.vector_store = st.session_state.chatbot.load_vector_store()
+        except Exception as e:
+            st.error(f"Error loading vector store: {e}")
+            return
 
-if __name__ == "__main__":
+    # Chat input
+    user_question = st.text_input("Ask a question about the document:")
+
+    # Process chat
+    if user_question:
+        try:
+            with st.spinner("Processing..."):
+                response = st.session_state.chatbot.get_response(
+                    user_question, st.session_state.vector_store
+                )
+
+            # Display answer
+            if 'answer' in response:
+                st.write("Assistant:", response['answer'])
+            else:
+                st.warning("No response generated.")
+
+            # Display source documents
+            if 'source_documents' in response:
+                with st.expander("Source Documents"):
+                    for doc in response['source_documents']:
+                        st.write(doc.page_content)
+        except Exception as e:
+            st.error(f"Error processing question: {e}")
+
+def create_vector_store():
+    """Utility function to create vector store"""
+    st.title("Create Vector Store")
+
+    # Ensure directory exists
+    os.makedirs("data", exist_ok=True)
+
+    # PDF file uploader
+    uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+
+    if uploaded_file is not None:
+        pdf_path = f"data/{uploaded_file.name}"
+        with open(pdf_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+
+        # Process PDF
+        processor = PDFProcessor()
+        with st.spinner("Processing PDF..."):
+            result = processor.process_pdf(pdf_path)
+            st.success(f"Vector store created: {result}")
+
+# Sidebar navigation
+st.sidebar.title("Navigation")
+app_mode = st.sidebar.selectbox("Choose the app mode", ["Chatbot", "Create Vector Store"])
+
+if app_mode == "Chatbot":
     main()
+else:
+    create_vector_store()

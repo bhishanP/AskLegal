@@ -5,3 +5,5 @@ langchain_community
 faiss-cpu
 sentence-transformers
 python-dotenv
+langchain-groq 
+huggingface_hub
